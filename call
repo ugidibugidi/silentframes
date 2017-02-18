@@ -1,0 +1,9 @@
+cd /home/user/repos/silentframes/spectrogram
+python simple_spec_test.py -start 0 -stop 450 /home/user/Desktop/masterarbeit/RTL-h20.mp3 22050 512 256
+
+python simple_spec_test.py -start 0 -stop 900 /home/user/Desktop/masterarbeit/RTL-h20.mp3 22050 512 496
+
+
+
+
+user@ubuntu:~/repos/silentframes/code$ python checker_playground_adjust_diagram.py 
