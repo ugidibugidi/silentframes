@@ -160,6 +160,18 @@ def filter_above_threshold(list, cutoff_threshold, fixed_pass_threshold, variabl
     
     return variable_pass_threshold, list_copy
     
+def reset_value(list, old_value, new_value):
+    """
+    Returns the a new list which sets all the entries that are equal to old_value to the new_value.
+    """
+    import numpy as np
+    
+    list_copy = np.copy(list)
+    condition = list_copy == old_value
+    list_copy[np.where(condition)[0]] = new_value
+    
+    return list_copy
+    
     
 def read_commercial_annotations(file, commercial_id='2;'):
     """
@@ -183,32 +195,31 @@ def read_commercial_annotations(file, commercial_id='2;'):
     return annotations
     
 
-def print_annotations(src_plot, annotations, len_per_hour, max_size, from_len, to_len, y_axis_max_size):
+def print_annotations(src_plot, annotations, elements_per_hour, max_size, from_len, to_len, y_axis_max_size):
     """
     Print the annotations to a plot.
     """
 
     for a in annotations:
-        a_start = a[0]*len_per_hour/max_size
-        a_end= (a[0]+a[1])*len_per_hour/max_size
+        a_start = a[0]*elements_per_hour/max_size
+        a_end= (a[0]+a[1])*elements_per_hour/max_size
         if (from_len < a_start) and (a_start < to_len): # if the hour is splitted
             a_start -= from_len
             a_end -= from_len
             src_plot.fill_between([a_start, a_end], 0, y_axis_max_size, facecolor='gray', alpha=0.3)
     
 
-def check_results_start_points(prediction, true_class, decision_rate=0.2):
+def check_results_start_points(elements_per_hour, prediction, true_class, decision_rate=0.2):
     """
     Compute True-Positive, False-Positive, True-Negative and False-Negative of the prediction and true_class.
     The decision rate is 
     """
     max_size = 3600.0 # in s
-    len_per_hour = 160040.0
     time_diff = 0.3 # in s
     
     # convert prediction to other format
     prediction_converted = np.array([idx for idx, p in enumerate(prediction) if p > 0.0], dtype=np.float)
-    prediction_converted *= max_size/len_per_hour
+    prediction_converted *= max_size/float(elements_per_hour)
     
     prediction_cleared = [] # create a list for easier appending
     actual = prediction_converted[0]
@@ -261,44 +272,47 @@ def check_results_start_points(prediction, true_class, decision_rate=0.2):
     return tp, fp, tn, fn
 
 
-def masked_area_between_points(list, min_distance, max_distance, set_to_val):
+def masked_area_between_points(elements_per_hour, list, min_distance, max_distance, set_to_val):
     """
     Sets the area between values greater than 0.0 to val if they are at least min_distance
     away from each other and at most max_distance.
     """
     max_size = 3600.0 # in s
-    len_per_hour = 160040.0
-    time_diff = 0.3 # in s
-    frame_to_time = max_size/len_per_hour
-    time_to_frame = len_per_hour/max_size
+    frame_to_time = max_size/float(elements_per_hour)
+    time_to_frame = float(elements_per_hour)/max_size
     
     list1 = np.zeros(list.shape)
     threshold = 0.0
     
     idx_of_positives = np.array([idx for idx, p in enumerate(list) if p > threshold])
-    
-    for i1 in idx_of_positives:
-        t1 = i1 * frame_to_time
-        for i2 in idx_of_positives:
-            t2 = i2 * frame_to_time
+
+    for i,idx_of_positive1 in enumerate(idx_of_positives):
+        t1 = idx_of_positive1 * frame_to_time
+        
+        # Start at the search at i (commercials are longer than 0 seconds)
+        for idx_of_positive2 in idx_of_positives[i:]:
+            t2 = idx_of_positive2 * frame_to_time
             diff = t2 - t1
-            if min_distance < diff and diff < max_distance: # implicitly ignore all cases where t2 < t1
-                for j in range(i1, i2): # mask area between
-                    list1[j] = set_to_val               
+            
+            # Stop search when the max distance has been reached
+            if diff > max_distance:
+                break
+            
+            # Set area between min and max distance to the input value
+            if min_distance < diff and diff < max_distance:
+                list1[idx_of_positive1:idx_of_positive2] = set_to_val
 
     return list1
 
 
-def check_results_mask(prediction, true_class, decision_rate=0.2):
+def check_results_mask(elements_per_hour, prediction, true_class, decision_rate=0.2):
     """
     Compute True-Positive, False-Positive, True-Negative and False-Negative of the prediction and true_class.
     The decision rate is 
     """
     max_size = 3600.0 # in s
-    len_per_hour = 160040.0
-    time_diff = 0.3 # in s
-    frame_to_time = max_size/len_per_hour
-    time_to_frame = len_per_hour/max_size
+    frame_to_time = max_size/float(elements_per_hour)
+    time_to_frame = float(elements_per_hour)/max_size
     
     # convert true_class to other format
     true_class_expanded = np.zeros(prediction.shape)
@@ -380,11 +394,20 @@ def gaussian(x, mu, sig):
     
 def get_threshold(channel, daytime):
     #daytime in full hours (0-23)
+    cutoff_threshold = 0.0018
+    fixed_pass_threshold = 0.0002
+    variable_pass_th_variance = 1.6
+    top_n_largest = 40
+    top_n_min = 1
+    
+    #uncomment for spectral flatness threshold
+    '''
     cutoff_threshold = 0.3
     fixed_pass_threshold = 0.6
     variable_pass_th_variance = 1.1
     top_n_largest = 30
     top_n_min = 1
+    '''
     
     #uncomment for heuristic threshold
     '''
@@ -403,18 +426,21 @@ def get_threshold(channel, daytime):
 
 def run():    
     fs = 22050
-    ws = 512
-    hs = 496
+    ws = 1024 #512
+    hs = 512 #496
     working_dir = "/home/user/repos/silentframes/"
     data_path = working_dir + "data/" # where the mp3-files are
     annotation_path = data_path + "annotations/"
     stepsize = 3600 # in seconds
     max_size = 3600 # in seconds (1h=3600s)
+    elements_per_hour = int((fs / (hs*1.0)) * max_size) # 160040 (for ws=512 und hs=496)
     y_axis_max_size = 0.7001 # maximal value of y axis (to get a uniform scale over all plots)
+    y_axis_max_size_rms = 0.002 # maximal value of y axis for the RMS feature (to get a uniform scale over all plots)
     y_axis_min_size = 0.0 # minimal value of y axis (to get a uniform scale over all plots)
-    x_axis_max_size = 27000 #160040 # maximal value of x axis (to get a uniform scale over all plots)
-    x_axis_min_size =  13000 #0 # minimal value of x axis (to get a uniform scale over all plots)
-    len_per_hour = 160040 #fixed for plotting regions
+    x_axis_max_size = elements_per_hour #160040 # maximal value of x axis (to get a uniform scale over all plots)
+    x_axis_min_size =  0 #0 # minimal value of x axis (to get a uniform scale over all plots)
+    min_comm_length = 3.0
+    max_comm_length = 90.0
     
     show_figures = 1
 
@@ -422,7 +448,12 @@ def run():
     
     summary = [] 
 
-    files = ['RTL-h20.mp3']# take only non-folders
+    #files = ['RTL-h8.mp3']# take only non-folders
+    files = ['Sat1-h7.mp3']# take only non-folders
+    #files = ['ARD-h1.mp3']# take only non-folders
+    
+    #tmp = [f for f in os.listdir(data_path) if os.path.isfile(os.path.join(data_path, f))]# take only non-folders
+    #files = natural_sort(tmp)
     
     for file_num, f in enumerate(files):
         abs_f = data_path + f
@@ -451,10 +482,10 @@ def run():
 
             # spectral flatness
             sflatness = spectral_flatness(magspec_without_last, axis=0)
-            
+         
             # RMS
             rms = rms_energy(magspec_without_last) / max(rms_energy(magspec_without_last))
-            
+          
             # extract local maxima
             # --> maybe smooth it before numpy.convolve() ... http://wiki.scipy.org/Cookbook/SignalSmooth
             #sflatness_smoothed = smooth(sflatness, window_len=11)
@@ -464,28 +495,27 @@ def run():
             channel =  f.split('-')[0] 
             daytime = int(((f.split('-')[1]) .split('h')[1]).split('.')[0])
             cutoff_th, fixed_pass_th, variable_pass_th_var, top_n_largest = get_threshold(channel, daytime)
-            (variable_pass_th, sflatness_masked) = filter_below_threshold(sflatness, #sflatness_local_maxima, 
-                        cutoff_th, fixed_pass_th, variable_pass_th_variance=variable_pass_th_var, top_n_largest=top_n_largest)
+            (variable_pass_th, rms_masked) = filter_above_threshold(rms, #sflatness_local_maxima, 
+                        cutoff_th, fixed_pass_th, variable_pass_th_variance=variable_pass_th_var, top_n_smallest=top_n_largest)			
+            #(variable_pass_th, sflatness_masked) = filter_below_threshold(sflatness, #sflatness_local_maxima, 
+            #            cutoff_th, fixed_pass_th, variable_pass_th_variance=variable_pass_th_var, top_n_largest=top_n_largest)
 
             # set area between candidates to 1.0
-            sflatness_area = masked_area_between_points(sflatness_masked, 3.0, 90.0, 0.6)
-
+            rms_area = masked_area_between_points(elements_per_hour, rms_masked, min_comm_length, max_comm_length, 1.0)
+            
             # calculate statistics
-            #tp, fp, tn, fn = check_results_start_points(sflatness_masked, anno, decision_rate=0.2)
+            #tp, fp, tn, fn = check_results_start_points(elements_per_hour, sflatness_masked, anno, decision_rate=0.2)
             #baseline = np.zeros(sflatness.shape)
-            #tp, fp, tn, fn = check_results_mask(baseline, anno, decision_rate=0.2)
-            tp, fp, tn, fn = check_results_mask(sflatness_area, anno, decision_rate=0.2)	    
+            #tp, fp, tn, fn = check_results_mask(elements_per_hour, baseline, anno, decision_rate=0.2)
+            tp, fp, tn, fn = check_results_mask(elements_per_hour, rms_area, anno, decision_rate=0.2)	    
             summary.append( (os.path.splitext(f)[0], tp, fp, tn, fn) )
             
             # NEW
-            #set area between  to 1.0
-            sflatness_area = masked_area_between_points(sflatness_masked, 3.0, 90.0, 1.0)
-
-            tmp_time = np.linspace(0.0, np.float(3600.0), num=sflatness_area.shape[0], endpoint=False)
+            tmp_time = np.linspace(0.0, np.float(3600.0), num=rms_area.shape[0], endpoint=False)
 
             out_f = open(working_dir + 'data/betweenSilentFrames/' + f.replace(".mp3", ".betweenSilentFrames") , 'wb')
-            for i in range(sflatness_area.shape[0]):
-                out_f.write('{0:.8f}'.format(tmp_time[i]).rstrip('0').rstrip('.') + "," + repr(sflatness_area[i]) + "\n")
+            for i in range(rms_area.shape[0]):
+                out_f.write('{0:.8f}'.format(tmp_time[i]).rstrip('0').rstrip('.') + "," + repr(rms_area[i]) + "\n")
             out_f.close()
             # NEW
             
@@ -494,7 +524,6 @@ def run():
             if show_figures:
                 
                 f, axarr = plt.subplots(4, sharex=True)
-                
                 
                 # set ticks, ticklabels in seconds
                 length = magspec.shape[1]
@@ -505,55 +534,48 @@ def run():
                 tick_per_dist = int(round(length / numticks))
                 xtickrange = range(length)[::tick_per_dist]
                 xticklabels = ["%d"%((round(Spectrogram.frameidx2time(i, ws=ws, hs=hs, fs=fs)+j*stepsize)/tickdist_labels_in_minutes)) for i in xtickrange]
-                
-                
-                
-                # WHY IS THE LAST (4th) PLOT NOT SCALED TO X?
-                #fourth subplot 
-                y_temp = y_axis_max_size
-                y_axis_max_size = 0.01
-                axarr[0].plot(rms, alpha=0.8, linewidth=1)
-                print_annotations(axarr[0], anno, len_per_hour, max_size, j*len(rms), (j+1)*len(rms), y_axis_max_size)
+
+                #first subplot (old value: spectral flatness)
+                axarr[0].plot(sflatness, alpha=0.8, linewidth=1)
+                axarr[0].axhline(y=cutoff_th, linewidth=2.5, color='g')
+                axarr[0].axhline(y=fixed_pass_th, linewidth=2.5, color='r')
+                axarr[0].axhline(y=variable_pass_th, linewidth=2.5, color='k')
+                print_annotations(axarr[0], anno, elements_per_hour, max_size, j*len(sflatness), (j+1)*len(sflatness), y_axis_max_size)
                 #axarr[0].set_title("Spectral Flatness  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
                 axarr[0].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size) # set constant y scale
                 axarr[0].set_xlim(xmin=x_axis_min_size, xmax=x_axis_max_size)
                 axarr[0].set_yticks(np.arange(0.0, y_axis_max_size, 0.1))
                 axarr[0].set_title("Before peak picking (step: 1c)")
-                axarr[0].set_ylabel("RMS")
+                axarr[0].set_ylabel("Spectral Flatness")
                 
-                y_axis_max_size = y_temp
-                
-                
-                
-                
-                
-                #first subplot
-                axarr[1].plot(sflatness, alpha=0.8, linewidth=1)
+                #second subplot 
+                axarr[1].plot(rms, alpha=0.8, linewidth=1)
                 axarr[1].axhline(y=cutoff_th, linewidth=2.5, color='g')
                 axarr[1].axhline(y=fixed_pass_th, linewidth=2.5, color='r')
                 axarr[1].axhline(y=variable_pass_th, linewidth=2.5, color='k')
-                print_annotations(axarr[1], anno, len_per_hour, max_size, j*len(sflatness), (j+1)*len(sflatness), y_axis_max_size)
-                #axarr[0].set_title("Spectral Flatness  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
-                axarr[1].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size) # set constant y scale
-                axarr[1].set_xlim(xmin=x_axis_min_size, xmax=x_axis_max_size)
-                axarr[1].set_yticks(np.arange(0.0, y_axis_max_size, 0.1))
+                print_annotations(axarr[1], anno, elements_per_hour, max_size, j*len(rms), (j+1)*len(rms), y_axis_max_size_rms)
+                #axarr[1].set_title("Spectral Flatness  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
+                axarr[1].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size_rms) # set constant y scale
+                axarr[1].set_xlim(xmin=x_axis_min_size, xmax=y_axis_max_size_rms)
+                axarr[1].set_yticks(np.arange(0.0, y_axis_max_size_rms, 0.1))
                 axarr[1].set_title("Before peak picking (step: 1c)")
-                axarr[1].set_ylabel("Spectral Flatness")
+                axarr[1].set_ylabel("RMS")
                 
-                #second subplot
-                axarr[2].plot(sflatness_masked, alpha=0.7, linewidth=2.5)
-                print_annotations(axarr[2], anno, len_per_hour, max_size, j*len(sflatness), (j+1)*len(sflatness), y_axis_max_size)
+                #third subplot
+                #axarr[2].plot(rms_masked, alpha=0.7, linewidth=2.5)
+                axarr[2].plot(reset_value(rms_masked, 0.0, 1.0), alpha=0.7, linewidth=2.5)
+                print_annotations(axarr[2], anno, elements_per_hour, max_size, j*len(rms), (j+1)*len(rms), y_axis_max_size_rms)
                 #axarr[1].set_title("Spectral Flatness (selected)  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
-                axarr[2].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size) # set constant y scale
-                axarr[2].set_xlim(xmin=x_axis_min_size, xmax=x_axis_max_size)
-                axarr[2].set_yticks(np.arange(0.0, y_axis_max_size, 0.1))
+                axarr[2].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size_rms) # set constant y scale
+                axarr[2].set_xlim(xmin=x_axis_min_size, xmax=y_axis_max_size_rms)
+                axarr[2].set_yticks(np.arange(0.0, y_axis_max_size_rms, 0.1))
                 axarr[2].set_title("After peak picking (step: 1c)")
-                axarr[2].set_ylabel("Spectral Flatness")
+                axarr[2].set_ylabel("RMS")
 
-               #third subplot PROTOTYP only for whole hours
-                axarr[3].plot(sflatness_area, alpha=0.7, linewidth=2.5)
-                print_annotations(axarr[3], anno, len_per_hour, max_size, j*len(sflatness), (j+1)*len(sflatness), y_axis_max_size)	    
-                axarr[3].fill_between(range(sflatness_area.shape[0]), 0, sflatness_area, facecolor='blue', alpha=0.3)
+               #fourth subplot PROTOTYP only for whole hours
+                axarr[3].plot(rms_area, alpha=0.7, linewidth=2.5)
+                print_annotations(axarr[3], anno, elements_per_hour, max_size, j*len(rms), (j+1)*len(rms), y_axis_max_size)	    
+                axarr[3].fill_between(range(rms_area.shape[0]), 0, rms_area, facecolor='blue', alpha=0.3)
                 #axarr[2].set_title("Connect area between  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
                 axarr[3].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size) # set constant y scale
                 axarr[3].set_xlim(xmin=x_axis_min_size, xmax=x_axis_max_size)
@@ -562,12 +584,11 @@ def run():
                 axarr[3].set_title("At the end (step: 2)")
                 axarr[3].set_ylabel("Commercial")
                 
-                
 
         if show_figures:
             f.subplots_adjust(hspace=0.25)
             plt.setp([a.get_xticklabels() for a in f.axes[:-1]], visible=False)
-            plt.xticks(np.linspace(0, len_per_hour, num=7), [0, 10, 20, 30, 40, 50, 60])
+            plt.xticks(np.linspace(0, elements_per_hour, num=7), [0, 10, 20, 30, 40, 50, 60])
             plt.xlabel("Time [min]")
             f.set_size_inches(13, 11)
     
@@ -600,6 +621,16 @@ def run():
         print ( str(summary_names[idx]) + " \t " + str(tp) + " \t " + str(fp) + " \t " + 
                     str(tn) + " \t " + str(fn) + " \t " + str(round(prec,3)) + " \t " + 
                     str(round(recall,3)) + " \t " + str(round(fmeasure,3)) + " \t " + str(round(accuracy,3)) )
+
+    print "################################################"
+    print "cutoff_th: \t\t" + str(cutoff_th)
+    print "fixed_pass_th: \t\t" + str(fixed_pass_th)
+    print "variable_pass_th_var: \t" + str(variable_pass_th_var)
+    print "top_n_largest: \t\t" + str(top_n_largest)
+    print "min_comm_length: \t" + str(min_comm_length)
+    print "max_comm_length: \t" + str(max_comm_length)
+    print "window_size: \t" + str(ws)
+    print "hop_size: \t" + str(hs)
 
     if show_figures:
         raw_input('Press Enter to continue...')
