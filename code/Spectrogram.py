@@ -184,6 +184,7 @@ def spectrogram(signal, ws, hs):
     winhalf = ws / 2
     num_win = int(np.floor((len(signal) - ws) / hs))
     div_numwin_100 = 100.0/num_win
+    print "Allocating memory for spectrogram: " + str(((winhalf+1) * (num_win+1) * np.dtype(np.complex).itemsize) / (1.0*1024*1024)) + "MB"
     spectrogram = np.zeros((winhalf+1, num_win+1), dtype=complex)
     signal = np.array(signal)
     rfft = np.fft.rfft

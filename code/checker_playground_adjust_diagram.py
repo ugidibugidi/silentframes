@@ -318,11 +318,11 @@ def check_results_mask(elements_per_hour, prediction, true_class, decision_rate=
     true_class_expanded = np.zeros(prediction.shape)
     for start,duration in true_class:
         start_frame = int(np.floor(start * time_to_frame))
-        end_frame = int(np.floor((start+duration) * time_to_frame))
+        end_frame = min(int(np.floor((start+duration) * time_to_frame)), true_class_expanded.shape[0])
         for i in range(start_frame, end_frame):
             true_class_expanded[i-1] = 1.0
     
-    
+
     tp, fp, tn, fn = 0, 0, 0, 0
     
     delta = int(np.floor(decision_rate * time_to_frame))
@@ -394,8 +394,8 @@ def gaussian(x, mu, sig):
     
 def get_threshold(channel, daytime):
     #daytime in full hours (0-23)
-    cutoff_threshold = 0.0018
-    fixed_pass_threshold = 0.0002
+    cutoff_threshold = 0.002
+    fixed_pass_threshold = 0.0004
     variable_pass_th_variance = 1.6
     top_n_largest = 40
     top_n_min = 1
@@ -426,8 +426,8 @@ def get_threshold(channel, daytime):
 
 def run():    
     fs = 22050
-    ws = 1024 #512
-    hs = 512 #496
+    ws = 4096 #512
+    hs = 2048 #496
     working_dir = "/home/user/repos/silentframes/"
     data_path = working_dir + "data/" # where the mp3-files are
     annotation_path = data_path + "annotations/"
@@ -435,25 +435,24 @@ def run():
     max_size = 3600 # in seconds (1h=3600s)
     elements_per_hour = int((fs / (hs*1.0)) * max_size) # 160040 (for ws=512 und hs=496)
     y_axis_max_size = 0.7001 # maximal value of y axis (to get a uniform scale over all plots)
-    y_axis_max_size_rms = 0.002 # maximal value of y axis for the RMS feature (to get a uniform scale over all plots)
+    y_axis_max_size_rms = 0.0025 # maximal value of y axis for the RMS feature (to get a uniform scale over all plots)
     y_axis_min_size = 0.0 # minimal value of y axis (to get a uniform scale over all plots)
     x_axis_max_size = elements_per_hour #160040 # maximal value of x axis (to get a uniform scale over all plots)
     x_axis_min_size =  0 #0 # minimal value of x axis (to get a uniform scale over all plots)
     min_comm_length = 3.0
     max_comm_length = 90.0
     
-    show_figures = 1
+    show_figures = 0
 
     steps = np.ceil(max_size/stepsize)
     
     summary = [] 
 
-    #files = ['RTL-h8.mp3']# take only non-folders
-    files = ['Sat1-h7.mp3']# take only non-folders
-    #files = ['ARD-h1.mp3']# take only non-folders
+    #files = ['RTL-h12.mp3']# take only non-folders
+    #files = ['ARD-h16.mp3', 'Sat1-h7.mp3', 'RTL-h5.mp3', 'ZDF-h14.mp3', 'ZDF-h17.mp3']# take only non-folders
     
-    #tmp = [f for f in os.listdir(data_path) if os.path.isfile(os.path.join(data_path, f))]# take only non-folders
-    #files = natural_sort(tmp)
+    tmp = [f for f in os.listdir(data_path) if os.path.isfile(os.path.join(data_path, f))]# take only non-folders
+    files = natural_sort(tmp)
     
     for file_num, f in enumerate(files):
         abs_f = data_path + f
@@ -472,9 +471,9 @@ def run():
             
             # convert file and make spectrogram
             signal = np.frombuffer(audio_converter.decode_to_memory(abs_f, sample_rate=fs, skip=step, maxlen=stepsize), dtype=np.float32)
-            magspec = abs(Spectrogram.spectrogram(signal, ws=ws, hs=hs))
-            print "magpsec shape: %s"%(magspec.shape,)
-            magspec_without_last = magspec[:,0:magspec.shape[1]-1] # remove the last entry because it always contains 0
+            magspec_without_last = abs(Spectrogram.spectrogram(signal, ws=ws, hs=hs))[:,:-1] 
+            signal = None # unlink variable (the garbage collector can then free the memory if it is needed)
+            print "magpsec shape w/o last element (always contains 0): %s"%(magspec_without_last.shape,)
 
             # arithmetic mean
             #amean = arithmetic_mean(magspec_without_last, axis=0)
@@ -482,9 +481,11 @@ def run():
 
             # spectral flatness
             sflatness = spectral_flatness(magspec_without_last, axis=0)
-         
+            
             # RMS
             rms = rms_energy(magspec_without_last) / max(rms_energy(magspec_without_last))
+            
+            magspec_without_last = None # unlink variable (the garbage collector can then free the memory if it is needed)
           
             # extract local maxima
             # --> maybe smooth it before numpy.convolve() ... http://wiki.scipy.org/Cookbook/SignalSmooth
@@ -499,6 +500,7 @@ def run():
                         cutoff_th, fixed_pass_th, variable_pass_th_variance=variable_pass_th_var, top_n_smallest=top_n_largest)			
             #(variable_pass_th, sflatness_masked) = filter_below_threshold(sflatness, #sflatness_local_maxima, 
             #            cutoff_th, fixed_pass_th, variable_pass_th_variance=variable_pass_th_var, top_n_largest=top_n_largest)
+            print "variable_pass_th: \t\t" + str(variable_pass_th)
 
             # set area between candidates to 1.0
             rms_area = masked_area_between_points(elements_per_hour, rms_masked, min_comm_length, max_comm_length, 1.0)
@@ -526,7 +528,7 @@ def run():
                 f, axarr = plt.subplots(4, sharex=True)
                 
                 # set ticks, ticklabels in seconds
-                length = magspec.shape[1]
+                length = rms.shape[0]
                 length_sec = Spectrogram.frameidx2time(length, ws=ws, hs=hs, fs=fs)
                 tickdist_seconds = 120 # one tick every n seconds
                 tickdist_labels_in_minutes = 60 # for seconds use 1; for minutes 60
@@ -557,7 +559,7 @@ def run():
                 #axarr[1].set_title("Spectral Flatness  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
                 axarr[1].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size_rms) # set constant y scale
                 axarr[1].set_xlim(xmin=x_axis_min_size, xmax=y_axis_max_size_rms)
-                axarr[1].set_yticks(np.arange(0.0, y_axis_max_size_rms, 0.1))
+                axarr[1].set_yticks(np.arange(0.0, y_axis_max_size_rms, 0.0005))
                 axarr[1].set_title("Before peak picking (step: 1c)")
                 axarr[1].set_ylabel("RMS")
                 
@@ -568,7 +570,7 @@ def run():
                 #axarr[1].set_title("Spectral Flatness (selected)  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
                 axarr[2].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size_rms) # set constant y scale
                 axarr[2].set_xlim(xmin=x_axis_min_size, xmax=y_axis_max_size_rms)
-                axarr[2].set_yticks(np.arange(0.0, y_axis_max_size_rms, 0.1))
+                axarr[2].set_yticks(np.arange(0.0, y_axis_max_size_rms, 0.0005))
                 axarr[2].set_title("After peak picking (step: 1c)")
                 axarr[2].set_ylabel("RMS")
 
@@ -629,8 +631,8 @@ def run():
     print "top_n_largest: \t\t" + str(top_n_largest)
     print "min_comm_length: \t" + str(min_comm_length)
     print "max_comm_length: \t" + str(max_comm_length)
-    print "window_size: \t" + str(ws)
-    print "hop_size: \t" + str(hs)
+    print "window_size: \t\t" + str(ws)
+    print "hop_size: \t\t" + str(hs)
 
     if show_figures:
         raw_input('Press Enter to continue...')
