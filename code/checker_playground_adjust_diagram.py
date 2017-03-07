@@ -394,10 +394,10 @@ def gaussian(x, mu, sig):
     
 def get_threshold(channel, daytime):
     #daytime in full hours (0-23)
-    cutoff_threshold = 0.002
+    cutoff_threshold = 0.0012
     fixed_pass_threshold = 0.0004
-    variable_pass_th_variance = 1.6
-    top_n_largest = 40
+    variable_pass_th_variance = 1.3
+    top_n_largest = 30
     top_n_min = 1
     
     #uncomment for spectral flatness threshold
@@ -426,8 +426,8 @@ def get_threshold(channel, daytime):
 
 def run():    
     fs = 22050
-    ws = 4096 #512
-    hs = 2048 #496
+    ws = 512 #512
+    hs = 256 #496
     working_dir = "/home/user/repos/silentframes/"
     data_path = working_dir + "data/" # where the mp3-files are
     annotation_path = data_path + "annotations/"
@@ -435,206 +435,227 @@ def run():
     max_size = 3600 # in seconds (1h=3600s)
     elements_per_hour = int((fs / (hs*1.0)) * max_size) # 160040 (for ws=512 und hs=496)
     y_axis_max_size = 0.7001 # maximal value of y axis (to get a uniform scale over all plots)
-    y_axis_max_size_rms = 0.0025 # maximal value of y axis for the RMS feature (to get a uniform scale over all plots)
+    y_axis_max_size_rms = 0.00151 #0.0025 # maximal value of y axis for the RMS feature (to get a uniform scale over all plots)
     y_axis_min_size = 0.0 # minimal value of y axis (to get a uniform scale over all plots)
     x_axis_max_size = elements_per_hour #160040 # maximal value of x axis (to get a uniform scale over all plots)
     x_axis_min_size =  0 #0 # minimal value of x axis (to get a uniform scale over all plots)
     min_comm_length = 3.0
     max_comm_length = 90.0
+    result_file_name = "result.txt"
+    result_file = open(result_file_name, 'w')
     
     show_figures = 0
 
     steps = np.ceil(max_size/stepsize)
     
-    summary = [] 
-
-    #files = ['RTL-h12.mp3']# take only non-folders
-    #files = ['ARD-h16.mp3', 'Sat1-h7.mp3', 'RTL-h5.mp3', 'ZDF-h14.mp3', 'ZDF-h17.mp3']# take only non-folders
-    
     tmp = [f for f in os.listdir(data_path) if os.path.isfile(os.path.join(data_path, f))]# take only non-folders
     files = natural_sort(tmp)
     
-    for file_num, f in enumerate(files):
-        abs_f = data_path + f
-        print  "############ " + f +  " ###### " + str(file_num+1) + "/" + str(len(files)) + " ############"
+    #files = ['Sat1-h19.mp3']# take only non-folders
+    #files = ['ARD-h16.mp3', 'Sat1-h7.mp3', 'RTL-h5.mp3', 'ZDF-h14.mp3', 'ZDF-h17.mp3']# take only non-folders
+    
+    
+    # TEMP1: manually set them to variy the parameters
+    cutoff_th, fixed_pass_th, variable_pass_th_var, top_n_largest =  0.0012, 0.0004, 1.5, 30
+    
+    for top_n_largest in [ 10, 20, 40, 80, 120, 160 ] :
+        print  "#######################################################################################"
+        print  "### top_n_largest: " + str(top_n_largest) + " ###########################################################"
+        print  "#######################################################################################"
         
-        # read annotion file
-        annotation_file = annotation_path + os.path.splitext(f)[0] + ".label"
-        anno = read_commercial_annotations(annotation_file, commercial_id='2;')
-        
-        #make one figure per file
-        if show_figures:
-            plt.rcParams.update({'font.size': 14})
-
-        for (j, step) in enumerate(xrange(0, max_size, stepsize)):
-            #print  "###### from " + str(step) + " to " + str(step+stepsize) + " ###"
+        summary = [] 
+    
+        for file_num, f in enumerate(files):
+            abs_f = data_path + f
+            print  "############ " + f +  " ###### " + str(file_num+1) + "/" + str(len(files)) + " ############"
             
-            # convert file and make spectrogram
-            signal = np.frombuffer(audio_converter.decode_to_memory(abs_f, sample_rate=fs, skip=step, maxlen=stepsize), dtype=np.float32)
-            magspec_without_last = abs(Spectrogram.spectrogram(signal, ws=ws, hs=hs))[:,:-1] 
-            signal = None # unlink variable (the garbage collector can then free the memory if it is needed)
-            print "magpsec shape w/o last element (always contains 0): %s"%(magspec_without_last.shape,)
-
-            # arithmetic mean
-            #amean = arithmetic_mean(magspec_without_last, axis=0)
-            #(tmp,amean_masked) = filter_above_threshold(amean, 0.001, 0.0001, variable_pass_th_variance=1.1, top_n_smallest=50)
-
-            # spectral flatness
-            sflatness = spectral_flatness(magspec_without_last, axis=0)
+            # read annotion file
+            annotation_file = annotation_path + os.path.splitext(f)[0] + ".label"
+            anno = read_commercial_annotations(annotation_file, commercial_id='2;')
             
-            # RMS
-            rms = rms_energy(magspec_without_last) / max(rms_energy(magspec_without_last))
-            
-            magspec_without_last = None # unlink variable (the garbage collector can then free the memory if it is needed)
-          
-            # extract local maxima
-            # --> maybe smooth it before numpy.convolve() ... http://wiki.scipy.org/Cookbook/SignalSmooth
-            #sflatness_smoothed = smooth(sflatness, window_len=11)
-            #sflatness_local_maxima = extract_local_maxima(sflatness_smoothed, order=2)
-            
-            # maske-out all non-candidates
-            channel =  f.split('-')[0] 
-            daytime = int(((f.split('-')[1]) .split('h')[1]).split('.')[0])
-            cutoff_th, fixed_pass_th, variable_pass_th_var, top_n_largest = get_threshold(channel, daytime)
-            (variable_pass_th, rms_masked) = filter_above_threshold(rms, #sflatness_local_maxima, 
-                        cutoff_th, fixed_pass_th, variable_pass_th_variance=variable_pass_th_var, top_n_smallest=top_n_largest)			
-            #(variable_pass_th, sflatness_masked) = filter_below_threshold(sflatness, #sflatness_local_maxima, 
-            #            cutoff_th, fixed_pass_th, variable_pass_th_variance=variable_pass_th_var, top_n_largest=top_n_largest)
-            print "variable_pass_th: \t\t" + str(variable_pass_th)
-
-            # set area between candidates to 1.0
-            rms_area = masked_area_between_points(elements_per_hour, rms_masked, min_comm_length, max_comm_length, 1.0)
-            
-            # calculate statistics
-            #tp, fp, tn, fn = check_results_start_points(elements_per_hour, sflatness_masked, anno, decision_rate=0.2)
-            #baseline = np.zeros(sflatness.shape)
-            #tp, fp, tn, fn = check_results_mask(elements_per_hour, baseline, anno, decision_rate=0.2)
-            tp, fp, tn, fn = check_results_mask(elements_per_hour, rms_area, anno, decision_rate=0.2)	    
-            summary.append( (os.path.splitext(f)[0], tp, fp, tn, fn) )
-            
-            # NEW
-            tmp_time = np.linspace(0.0, np.float(3600.0), num=rms_area.shape[0], endpoint=False)
-
-            out_f = open(working_dir + 'data/betweenSilentFrames/' + f.replace(".mp3", ".betweenSilentFrames") , 'wb')
-            for i in range(rms_area.shape[0]):
-                out_f.write('{0:.8f}'.format(tmp_time[i]).rstrip('0').rstrip('.') + "," + repr(rms_area[i]) + "\n")
-            out_f.close()
-            # NEW
-            
-            
-            # plot data
+            #make one figure per file
             if show_figures:
-                
-                f, axarr = plt.subplots(4, sharex=True)
-                
-                # set ticks, ticklabels in seconds
-                length = rms.shape[0]
-                length_sec = Spectrogram.frameidx2time(length, ws=ws, hs=hs, fs=fs)
-                tickdist_seconds = 120 # one tick every n seconds
-                tickdist_labels_in_minutes = 60 # for seconds use 1; for minutes 60
-                numticks = length_sec/tickdist_seconds
-                tick_per_dist = int(round(length / numticks))
-                xtickrange = range(length)[::tick_per_dist]
-                xticklabels = ["%d"%((round(Spectrogram.frameidx2time(i, ws=ws, hs=hs, fs=fs)+j*stepsize)/tickdist_labels_in_minutes)) for i in xtickrange]
+                plt.rcParams.update({'font.size': 14})
 
-                #first subplot (old value: spectral flatness)
-                axarr[0].plot(sflatness, alpha=0.8, linewidth=1)
-                axarr[0].axhline(y=cutoff_th, linewidth=2.5, color='g')
-                axarr[0].axhline(y=fixed_pass_th, linewidth=2.5, color='r')
-                axarr[0].axhline(y=variable_pass_th, linewidth=2.5, color='k')
-                print_annotations(axarr[0], anno, elements_per_hour, max_size, j*len(sflatness), (j+1)*len(sflatness), y_axis_max_size)
-                #axarr[0].set_title("Spectral Flatness  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
-                axarr[0].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size) # set constant y scale
-                axarr[0].set_xlim(xmin=x_axis_min_size, xmax=x_axis_max_size)
-                axarr[0].set_yticks(np.arange(0.0, y_axis_max_size, 0.1))
-                axarr[0].set_title("Before peak picking (step: 1c)")
-                axarr[0].set_ylabel("Spectral Flatness")
+            for (j, step) in enumerate(xrange(0, max_size, stepsize)):
+                #print  "###### from " + str(step) + " to " + str(step+stepsize) + " ###"
                 
-                #second subplot 
-                axarr[1].plot(rms, alpha=0.8, linewidth=1)
-                axarr[1].axhline(y=cutoff_th, linewidth=2.5, color='g')
-                axarr[1].axhline(y=fixed_pass_th, linewidth=2.5, color='r')
-                axarr[1].axhline(y=variable_pass_th, linewidth=2.5, color='k')
-                print_annotations(axarr[1], anno, elements_per_hour, max_size, j*len(rms), (j+1)*len(rms), y_axis_max_size_rms)
-                #axarr[1].set_title("Spectral Flatness  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
-                axarr[1].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size_rms) # set constant y scale
-                axarr[1].set_xlim(xmin=x_axis_min_size, xmax=y_axis_max_size_rms)
-                axarr[1].set_yticks(np.arange(0.0, y_axis_max_size_rms, 0.0005))
-                axarr[1].set_title("Before peak picking (step: 1c)")
-                axarr[1].set_ylabel("RMS")
-                
-                #third subplot
-                #axarr[2].plot(rms_masked, alpha=0.7, linewidth=2.5)
-                axarr[2].plot(reset_value(rms_masked, 0.0, 1.0), alpha=0.7, linewidth=2.5)
-                print_annotations(axarr[2], anno, elements_per_hour, max_size, j*len(rms), (j+1)*len(rms), y_axis_max_size_rms)
-                #axarr[1].set_title("Spectral Flatness (selected)  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
-                axarr[2].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size_rms) # set constant y scale
-                axarr[2].set_xlim(xmin=x_axis_min_size, xmax=y_axis_max_size_rms)
-                axarr[2].set_yticks(np.arange(0.0, y_axis_max_size_rms, 0.0005))
-                axarr[2].set_title("After peak picking (step: 1c)")
-                axarr[2].set_ylabel("RMS")
+                # convert file and make spectrogram
+                signal = np.frombuffer(audio_converter.decode_to_memory(abs_f, sample_rate=fs, skip=step, maxlen=stepsize), dtype=np.float32)
+                magspec_without_last = abs(Spectrogram.spectrogram(signal, ws=ws, hs=hs))[:,:-1] 
+                signal = None # unlink variable (the garbage collector can then free the memory if it is needed)
+                print "magpsec shape w/o last element (always contains 0): %s"%(magspec_without_last.shape,)
 
-               #fourth subplot PROTOTYP only for whole hours
-                axarr[3].plot(rms_area, alpha=0.7, linewidth=2.5)
-                print_annotations(axarr[3], anno, elements_per_hour, max_size, j*len(rms), (j+1)*len(rms), y_axis_max_size)	    
-                axarr[3].fill_between(range(rms_area.shape[0]), 0, rms_area, facecolor='blue', alpha=0.3)
-                #axarr[2].set_title("Connect area between  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
-                axarr[3].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size) # set constant y scale
-                axarr[3].set_xlim(xmin=x_axis_min_size, xmax=x_axis_max_size)
-                axarr[3].set_yticks([y_axis_min_size, y_axis_max_size])
-                axarr[3].set_yticklabels(['false', 'true'])
-                axarr[3].set_title("At the end (step: 2)")
-                axarr[3].set_ylabel("Commercial")
+                # arithmetic mean
+                #amean = arithmetic_mean(magspec_without_last, axis=0)
+                #(tmp,amean_masked) = filter_above_threshold(amean, 0.001, 0.0001, variable_pass_th_variance=1.1, top_n_smallest=50)
+
+                # spectral flatness
+                #sflatness = spectral_flatness(magspec_without_last, axis=0)
                 
+                # RMS
+                rms = rms_energy(magspec_without_last) / max(rms_energy(magspec_without_last))
+                
+                magspec_without_last = None # unlink variable (the garbage collector can then free the memory if it is needed)
+              
+                # extract local maxima
+                # --> maybe smooth it before numpy.convolve() ... http://wiki.scipy.org/Cookbook/SignalSmooth
+                #sflatness_smoothed = smooth(sflatness, window_len=11)
+                #sflatness_local_maxima = extract_local_maxima(sflatness_smoothed, order=2)
+                
+                # maske-out all non-candidates
+                channel =  f.split('-')[0] 
+                daytime = int(((f.split('-')[1]) .split('h')[1]).split('.')[0])
+                
+                # TEMP1: manually set them to variy the parameters
+                #cutoff_th, fixed_pass_th, variable_pass_th_var, top_n_largest = get_threshold(channel, daytime)
+                
+                (variable_pass_th, rms_masked) = filter_above_threshold(rms, #sflatness_local_maxima, 
+                            cutoff_th, fixed_pass_th, variable_pass_th_variance=variable_pass_th_var, top_n_smallest=top_n_largest)			
+                #(variable_pass_th, sflatness_masked) = filter_below_threshold(sflatness, #sflatness_local_maxima, 
+                #            cutoff_th, fixed_pass_th, variable_pass_th_variance=variable_pass_th_var, top_n_largest=top_n_largest)
+                print "variable_pass_th: \t\t" + str(variable_pass_th)
+
+                # set area between candidates to 1.0
+                rms_area = masked_area_between_points(elements_per_hour, rms_masked, min_comm_length, max_comm_length, 1.0)
+                
+                # calculate statistics
+                #tp, fp, tn, fn = check_results_start_points(elements_per_hour, sflatness_masked, anno, decision_rate=0.2)
+                #baseline = np.zeros(sflatness.shape)
+                #tp, fp, tn, fn = check_results_mask(elements_per_hour, baseline, anno, decision_rate=0.2)
+                tp, fp, tn, fn = check_results_mask(elements_per_hour, rms_area, anno, decision_rate=0.2)	    
+                summary.append( (os.path.splitext(f)[0], tp, fp, tn, fn) )
+                
+                # NEW
+                tmp_time = np.linspace(0.0, np.float(3600.0), num=rms_area.shape[0], endpoint=False)
+
+                out_f = open(working_dir + 'data/betweenSilentFrames/' + f.replace(".mp3", ".betweenSilentFrames") , 'wb')
+                for i in range(rms_area.shape[0]):
+                    out_f.write('{0:.8f}'.format(tmp_time[i]).rstrip('0').rstrip('.') + "," + repr(rms_area[i]) + "\n")
+                out_f.close()
+                # NEW
+                
+                
+                # plot data
+                if show_figures:
+                    
+                    f, axarr = plt.subplots(3, sharex=True)
+                    
+                    # set ticks, ticklabels in seconds
+                    length = rms.shape[0]
+                    length_sec = Spectrogram.frameidx2time(length, ws=ws, hs=hs, fs=fs)
+                    tickdist_seconds = 120 # one tick every n seconds
+                    tickdist_labels_in_minutes = 60 # for seconds use 1; for minutes 60
+                    numticks = length_sec/tickdist_seconds
+                    tick_per_dist = int(round(length / numticks))
+                    xtickrange = range(length)[::tick_per_dist]
+                    xticklabels = ["%d"%((round(Spectrogram.frameidx2time(i, ws=ws, hs=hs, fs=fs)+j*stepsize)/tickdist_labels_in_minutes)) for i in xtickrange]
+
+                    '''
+                    #first subplot (old value: spectral flatness)
+                    axarr[0].plot(sflatness, alpha=0.8, linewidth=1)
+                    axarr[0].axhline(y=cutoff_th, linewidth=2.5, color='g')
+                    axarr[0].axhline(y=fixed_pass_th, linewidth=2.5, color='r')
+                    axarr[0].axhline(y=variable_pass_th, linewidth=2.5, color='k')
+                    print_annotations(axarr[0], anno, elements_per_hour, max_size, j*len(sflatness), (j+1)*len(sflatness), y_axis_max_size)
+                    #axarr[0].set_title("Spectral Flatness  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
+                    axarr[0].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size) # set constant y scale
+                    axarr[0].set_xlim(xmin=x_axis_min_size, xmax=x_axis_max_size)
+                    axarr[0].set_yticks(np.arange(0.0, y_axis_max_size, 0.1))
+                    axarr[0].set_title("Before peak picking (step: 1c)")
+                    axarr[0].set_ylabel("Spectral Flatness")
+                    '''
+                    
+                    #first subplot 
+                    axarr[0].plot(rms, alpha=0.8, linewidth=1)
+                    axarr[0].axhline(y=cutoff_th, linewidth=2.5, color='g')
+                    axarr[0].axhline(y=fixed_pass_th, linewidth=2.5, color='r')
+                    axarr[0].axhline(y=variable_pass_th, linewidth=2.5, color='k')
+                    print_annotations(axarr[0], anno, elements_per_hour, max_size, j*len(rms), (j+1)*len(rms), y_axis_max_size_rms)
+                    #axarr[0].set_title("Root Mean Square  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
+                    axarr[0].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size_rms) # set constant y scale
+                    axarr[0].set_xlim(xmin=x_axis_min_size, xmax=y_axis_max_size_rms)
+                    axarr[0].set_yticks(np.arange(0.0, y_axis_max_size_rms, 0.0005))
+                    axarr[0].set_title("Before peak picking (step: 1c)")
+                    axarr[0].set_ylabel("RMS")
+                    
+                    #second subplot
+                    #axarr[1].plot(rms_masked, alpha=0.7, linewidth=2.5)
+                    axarr[1].plot(reset_value(rms_masked, 0.0, 1.0), alpha=0.7, linewidth=2.5)
+                    print_annotations(axarr[1], anno, elements_per_hour, max_size, j*len(rms), (j+1)*len(rms), y_axis_max_size_rms)
+                    #axarr[1].set_title("Spectral Flatness (selected)  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
+                    axarr[1].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size_rms) # set constant y scale
+                    axarr[1].set_xlim(xmin=x_axis_min_size, xmax=y_axis_max_size_rms)
+                    axarr[1].set_yticks(np.arange(0.0, y_axis_max_size_rms, 0.0005))
+                    axarr[1].set_title("After peak picking (step: 1c)")
+                    axarr[1].set_ylabel("RMS")
+
+                   #third subplot PROTOTYP only for whole hours
+                    axarr[2].plot(rms_area, alpha=0.7, linewidth=2.5)
+                    print_annotations(axarr[2], anno, elements_per_hour, max_size, j*len(rms), (j+1)*len(rms), y_axis_max_size)	    
+                    axarr[2].fill_between(range(rms_area.shape[0]), 0, rms_area, facecolor='blue', alpha=0.3)
+                    #axarr[2].set_title("Connect area between  |  Time: " + str(round(step/60,1)) + " - " + str(round((step+stepsize)/60, 1)) + " [min]")
+                    axarr[2].set_ylim(ymin=y_axis_min_size, ymax=y_axis_max_size) # set constant y scale
+                    axarr[2].set_xlim(xmin=x_axis_min_size, xmax=x_axis_max_size)
+                    axarr[2].set_yticks([y_axis_min_size, y_axis_max_size])
+                    axarr[2].set_yticklabels(['false', 'true'])
+                    axarr[2].set_title("At the end (step: 2)")
+                    axarr[2].set_ylabel("Commercial")
+                    
+
+            if show_figures:
+                f.subplots_adjust(hspace=0.25)
+                plt.setp([a.get_xticklabels() for a in f.axes[:-1]], visible=False)
+                plt.xticks(np.linspace(0, elements_per_hour, num=7), [0, 10, 20, 30, 40, 50, 60])
+                plt.xlabel("Time [min]")
+                f.set_size_inches(13, 11)
+        
+                plt.savefig('/home/user/Desktop/bsf_classification_process.png', bbox_inches='tight')    
+                plt.show()
+            
+
+        # calculating statistics
+        summary_names = (np.array(summary)[:,:1])
+        summary_values = (np.array(summary)[:,1:]).astype(np.integer)
+        
+        total_tp = summary_values.sum(0)[0]
+        total_fp = summary_values.sum(0)[1]
+        total_tn = summary_values.sum(0)[2]
+        total_fn = summary_values.sum(0)[3]
+
+        summary_names = np.vstack((summary_names, np.array([ 'total' ])))
+        summary_values = np.vstack((summary_values, np.array([ total_tp, total_fp, total_tn, total_fn ])))
+        
+        result_file.write("NAME      \t TP \t FP \t TN \t FN \t PREC \t RECL \t F1 \t ACC\n")
+        result_file_name
+        for idx, entry in enumerate(summary_values):
+            tp = entry[0]
+            fp = entry[1]
+            tn = entry[2]
+            fn = entry[3]
+            prec = tp / (tp+fp+0.0001)
+            recall = tp / (tp+fn+0.0001)
+            fmeasure = 2.0 * (prec * recall) / (prec + recall+0.0001)
+            accuracy = (tp+tn) / (tp+tn+fp+fn+0.0001)
+            result_file.write( str(summary_names[idx]) + " \t " + str(tp) + " \t " + str(fp) + " \t " + 
+                        str(tn) + " \t " + str(fn) + " \t " + str(round(prec,3)) + " \t " + 
+                        str(round(recall,3)) + " \t " + str(round(fmeasure,3)) + " \t " + str(round(accuracy,3)) + "\n")
+
+        result_file.write("################################################\n")
+        result_file.write("cutoff_th: \t\t" + str(cutoff_th) + "\n")
+        result_file.write("fixed_pass_th: \t\t" + str(fixed_pass_th) + "\n")
+        result_file.write("variable_pass_th_var: \t" + str(variable_pass_th_var) + "\n")
+        result_file.write("top_n_largest: \t\t" + str(top_n_largest) + "\n")
+        result_file.write("min_comm_length: \t" + str(min_comm_length) + "\n")
+        result_file.write("max_comm_length: \t" + str(max_comm_length) + "\n")
+        result_file.write("window_size: \t\t" + str(ws) + "\n")
+        result_file.write("hop_size: \t\t" + str(hs) + "\n")
+        result_file.write("\n\n\n")
+        result_file.flush()
 
         if show_figures:
-            f.subplots_adjust(hspace=0.25)
-            plt.setp([a.get_xticklabels() for a in f.axes[:-1]], visible=False)
-            plt.xticks(np.linspace(0, elements_per_hour, num=7), [0, 10, 20, 30, 40, 50, 60])
-            plt.xlabel("Time [min]")
-            f.set_size_inches(13, 11)
+            raw_input('Press Enter to continue...')
     
-            plt.savefig('/home/user/Desktop/bsf_classification_process.png', bbox_inches='tight')    
-            plt.show()
-        
-
-    # calculating statistics
-    summary_names = (np.array(summary)[:,:1])
-    summary_values = (np.array(summary)[:,1:]).astype(np.integer)
-    
-    total_tp = summary_values.sum(0)[0]
-    total_fp = summary_values.sum(0)[1]
-    total_tn = summary_values.sum(0)[2]
-    total_fn = summary_values.sum(0)[3]
-
-    summary_names = np.vstack((summary_names, np.array([ 'total' ])))
-    summary_values = np.vstack((summary_values, np.array([ total_tp, total_fp, total_tn, total_fn ])))
-    
-    print "NAME      \t TP \t FP \t TN \t FN \t PREC \t RECL \t F1 \t ACC "
-    for idx, entry in enumerate(summary_values):
-        tp = entry[0]
-        fp = entry[1]
-        tn = entry[2]
-        fn = entry[3]
-        prec = tp / (tp+fp+0.0001)
-        recall = tp / (tp+fn+0.0001)
-        fmeasure = 2.0 * (prec * recall) / (prec + recall+0.0001)
-        accuracy = (tp+tn) / (tp+tn+fp+fn+0.0001)
-        print ( str(summary_names[idx]) + " \t " + str(tp) + " \t " + str(fp) + " \t " + 
-                    str(tn) + " \t " + str(fn) + " \t " + str(round(prec,3)) + " \t " + 
-                    str(round(recall,3)) + " \t " + str(round(fmeasure,3)) + " \t " + str(round(accuracy,3)) )
-
-    print "################################################"
-    print "cutoff_th: \t\t" + str(cutoff_th)
-    print "fixed_pass_th: \t\t" + str(fixed_pass_th)
-    print "variable_pass_th_var: \t" + str(variable_pass_th_var)
-    print "top_n_largest: \t\t" + str(top_n_largest)
-    print "min_comm_length: \t" + str(min_comm_length)
-    print "max_comm_length: \t" + str(max_comm_length)
-    print "window_size: \t\t" + str(ws)
-    print "hop_size: \t\t" + str(hs)
-
-    if show_figures:
-        raw_input('Press Enter to continue...')
+    result_file.close()
 
 run()
