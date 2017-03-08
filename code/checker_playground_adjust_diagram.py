@@ -394,11 +394,14 @@ def gaussian(x, mu, sig):
     
 def get_threshold(channel, daytime):
     #daytime in full hours (0-23)
-    cutoff_threshold = 0.0012
-    fixed_pass_threshold = 0.0004
-    variable_pass_th_variance = 1.3
-    top_n_largest = 30
+    
+    #uncomment for RMS threshold
+    cutoff_threshold = 0.0007
+    fixed_pass_threshold = 0.0001
+    variable_pass_th_variance = 1.7
+    top_n_largest = 60
     top_n_min = 1
+    
     
     #uncomment for spectral flatness threshold
     '''
@@ -440,7 +443,7 @@ def run():
     x_axis_max_size = elements_per_hour #160040 # maximal value of x axis (to get a uniform scale over all plots)
     x_axis_min_size =  0 #0 # minimal value of x axis (to get a uniform scale over all plots)
     min_comm_length = 3.0
-    max_comm_length = 90.0
+    max_comm_length = 60.0
     result_file_name = "result.txt"
     result_file = open(result_file_name, 'w')
     
@@ -451,16 +454,17 @@ def run():
     tmp = [f for f in os.listdir(data_path) if os.path.isfile(os.path.join(data_path, f))]# take only non-folders
     files = natural_sort(tmp)
     
-    #files = ['Sat1-h19.mp3']# take only non-folders
+    #files = ['ZDF-h2.mp3', 'RTL-h20.mp3']# take only non-folders
     #files = ['ARD-h16.mp3', 'Sat1-h7.mp3', 'RTL-h5.mp3', 'ZDF-h14.mp3', 'ZDF-h17.mp3']# take only non-folders
     
     
-    # TEMP1: manually set them to variy the parameters
-    cutoff_th, fixed_pass_th, variable_pass_th_var, top_n_largest =  0.0012, 0.0004, 1.5, 30
+    # TEMP1: manually set them to vary the parameters
+    #cutoff_th, fixed_pass_th, variable_pass_th_var, top_n_largest =  0.0007, 0.0001, 1.7, 60
     
-    for top_n_largest in [ 10, 20, 40, 80, 120, 160 ] :
+    for max_comm_length in [ 4.0, 15.0, 30.0, 45.0, 60.0, 75.0, 90.0, 120.0, 200.0, 600.0, 3600.0 ] :
+    #for max_comm_length in [ 60.0 ] :
         print  "#######################################################################################"
-        print  "### top_n_largest: " + str(top_n_largest) + " ###########################################################"
+        print  "### max_comm_length: " + str(max_comm_length) + " ###########################################################"
         print  "#######################################################################################"
         
         summary = [] 
@@ -507,8 +511,8 @@ def run():
                 channel =  f.split('-')[0] 
                 daytime = int(((f.split('-')[1]) .split('h')[1]).split('.')[0])
                 
-                # TEMP1: manually set them to variy the parameters
-                #cutoff_th, fixed_pass_th, variable_pass_th_var, top_n_largest = get_threshold(channel, daytime)
+                # TEMP1: manually set them to vary the parameters
+                cutoff_th, fixed_pass_th, variable_pass_th_var, top_n_largest = get_threshold(channel, daytime)
                 
                 (variable_pass_th, rms_masked) = filter_above_threshold(rms, #sflatness_local_maxima, 
                             cutoff_th, fixed_pass_th, variable_pass_th_variance=variable_pass_th_var, top_n_smallest=top_n_largest)			
